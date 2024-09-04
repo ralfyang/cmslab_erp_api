@@ -133,6 +133,7 @@ func CreateEmployee(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+
     _, err = db.Exec("INSERT INTO employees (name, position) VALUES (@p1, @p2)", employee.Name, employee.Position)
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
