@@ -49,7 +49,7 @@ func main() {
     // API 라우팅 설정
     r := mux.NewRouter()
 
-    // 기본 API 엔드포인트 설정 (예시)
+    // API 엔드포인트 설정
     r.HandleFunc("/api/employees", GetEmployees).Methods("GET")
     r.HandleFunc("/api/employee/{id}", GetEmployeeByID).Methods("GET")
     r.HandleFunc("/api/employee", CreateEmployee).Methods("POST")
@@ -61,12 +61,10 @@ func main() {
     log.Fatal(http.ListenAndServe(":"+serverPort, r))
 }
 
-// API 핸들러 함수들
-
 // GetEmployees: 모든 직원 목록 가져오기
 func GetEmployees(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "application/json")
-    rows, err := db.Query("SELECT id, name, position FROM employees")
+    rows, err := db.Query("SELECT id, name, job_position, salary FROM employees")
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
@@ -76,16 +74,18 @@ func GetEmployees(w http.ResponseWriter, r *http.Request) {
     employees := []map[string]interface{}{}
     for rows.Next() {
         var id int
-        var name, position string
-        err = rows.Scan(&id, &name, &position)
+        var name, job_position string
+        var salary float64
+        err = rows.Scan(&id, &name, &job_position, &salary)
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
             return
         }
         employee := map[string]interface{}{
-            "id":       id,
-            "name":     name,
-            "position": position,
+            "id":           id,
+            "name":         name,
+            "job_position": job_position,
+            "salary":       salary,
         }
         employees = append(employees, employee)
     }
@@ -99,14 +99,15 @@ func GetEmployeeByID(w http.ResponseWriter, r *http.Request) {
     vars := mux.Vars(r)
     id := vars["id"]
 
-    row := db.QueryRow("SELECT id, name, position FROM employees WHERE id = @p1", id)
+    row := db.QueryRow("SELECT id, name, job_position, salary FROM employees WHERE id = @p1", id)
     var employee struct {
-        ID       int    `json:"id"`
-        Name     string `json:"name"`
-        Position string `json:"position"`
+        ID           int     `json:"id"`
+        Name         string  `json:"name"`
+        JobPosition  string  `json:"job_position"`
+        Salary       float64 `json:"salary"`
     }
 
-    err := row.Scan(&employee.ID, &employee.Name, &employee.Position)
+    err := row.Scan(&employee.ID, &employee.Name, &employee.JobPosition, &employee.Salary)
     if err == sql.ErrNoRows {
         http.Error(w, "Employee not found", http.StatusNotFound)
         return
@@ -123,8 +124,9 @@ func CreateEmployee(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "application/json")
 
     var employee struct {
-        Name     string `json:"name"`
-        Position string `json:"position"`
+        Name        string  `json:"name"`
+        JobPosition string  `json:"job_position"`
+        Salary      float64 `json:"salary"`
     }
 
     err := json.NewDecoder(r.Body).Decode(&employee)
@@ -133,8 +135,7 @@ func CreateEmployee(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-
-    _, err = db.Exec("INSERT INTO employees (name, position) VALUES (@p1, @p2)", employee.Name, employee.Position)
+    _, err = db.Exec("INSERT INTO employees (name, job_position, salary) VALUES (@p1, @p2, @p3)", employee.Name, employee.JobPosition, employee.Salary)
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
@@ -151,8 +152,9 @@ func UpdateEmployee(w http.ResponseWriter, r *http.Request) {
     id := vars["id"]
 
     var employee struct {
-        Name     string `json:"name"`
-        Position string `json:"position"`
+        Name        string  `json:"name"`
+        JobPosition string  `json:"job_position"`
+        Salary      float64 `json:"salary"`
     }
 
     err := json.NewDecoder(r.Body).Decode(&employee)
@@ -161,7 +163,7 @@ func UpdateEmployee(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    _, err = db.Exec("UPDATE employees SET name = @p1, position = @p2 WHERE id = @p3", employee.Name, employee.Position, id)
+    _, err = db.Exec("UPDATE employees SET name = @p1, job_position = @p2, salary = @p3 WHERE id = @p4", employee.Name, employee.JobPosition, employee.Salary, id)
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
@@ -184,6 +186,3 @@ func DeleteEmployee(w http.ResponseWriter, r *http.Request) {
 
     json.NewEncoder(w).Encode(map[string]string{"message": "Employee deleted"})
 }
-
-
-
