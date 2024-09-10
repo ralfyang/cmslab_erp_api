@@ -7,14 +7,137 @@ import (
     "log"
     "net/http"
     "os"
+    "strings"
+    "unicode/utf8"
 
     _ "github.com/denisenkom/go-mssqldb"
     "github.com/gorilla/mux"
     "github.com/joho/godotenv"
+    "golang.org/x/text/encoding/korean"
+    "golang.org/x/text/transform"
+    "io/ioutil"
 )
 
 var db *sql.DB
 
+// ConvertEUC_KRtoUTF8: EUC-KR에서 UTF-8로 변환
+func ConvertEUC_KRtoUTF8(input string) (string, error) {
+    reader := transform.NewReader(strings.NewReader(input), korean.EUCKR.NewDecoder())
+    utf8Text, err := ioutil.ReadAll(reader)
+    if err != nil {
+        return "", err
+    }
+    return string(utf8Text), nil
+}
+
+// UTF-8 인코딩을 확인하고 필요한 경우만 변환하는 함수
+func ConvertEUC_KRtoUTF8IfNecessary(input string) (string, error) {
+    // 입력이 이미 UTF-8 형식인 경우 변환하지 않음
+    if utf8.ValidString(input) {
+        return input, nil
+    }
+    // 변환이 필요한 경우 EUC-KR에서 UTF-8로 변환
+    return ConvertEUC_KRtoUTF8(input)
+}
+
+// GetEmployees: 모든 직원 목록 가져오기
+func GetEmployees(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    rows, err := db.Query("SELECT id, name, job_position, salary FROM employees")
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    defer rows.Close()
+
+    employees := []map[string]interface{}{}
+    for rows.Next() {
+        var id int
+        var name, jobPosition string
+        var salary float64
+        err = rows.Scan(&id, &name, &jobPosition, &salary)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+        employee := map[string]interface{}{
+            "id":           id,
+            "name":         name,
+            "job_position": jobPosition,
+            "salary":       salary,
+        }
+        employees = append(employees, employee)
+    }
+
+    json.NewEncoder(w).Encode(employees)
+}
+
+// 법인카드 결제이력 조회 API
+func GetCards(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    
+    // 쿼리 파라미터 가져오기
+    cCode := r.URL.Query().Get("c_code")
+    if cCode == "" {
+        cCode = "7000" // 기본 값
+    }
+
+    rows, err := db.Query(`
+        SELECT
+            C_CODE,       -- 코드 (소유자 관련 정보)
+            CLIENT_NOTE,  -- 적요
+            TRADE_PLACE,  -- 가맹점
+            DOCU_STAT,    -- 전표처리
+            MCC_CODE_NAME -- 코스트센터
+        FROM NEOE.CARD_TEMP
+        WHERE C_CODE = @p1
+    `, cCode)
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    defer rows.Close()
+
+    cards := []map[string]interface{}{}
+    for rows.Next() {
+        var cCode, clientNote, tradePlace, docuStat, mccCodeName sql.NullString
+        err = rows.Scan(&cCode, &clientNote, &tradePlace, &docuStat, &mccCodeName)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        // 인코딩 문제 해결: 각 항목을 UTF-8로 변환
+        tradePlaceUtf8, err := ConvertEUC_KRtoUTF8IfNecessary(tradePlace.String)
+        if err != nil {
+            tradePlaceUtf8 = tradePlace.String // 변환 실패 시 원래 문자열 사용
+        }
+
+        clientNoteUtf8, err := ConvertEUC_KRtoUTF8IfNecessary(clientNote.String)
+        if err != nil {
+            clientNoteUtf8 = clientNote.String
+        }
+
+        mccCodeNameUtf8, err := ConvertEUC_KRtoUTF8IfNecessary(mccCodeName.String)
+        if err != nil {
+            mccCodeNameUtf8 = mccCodeName.String
+        }
+
+        card := map[string]interface{}{
+            "c_code":       cCode.String,
+            "client_note":  clientNoteUtf8,
+            "trade_place":  tradePlaceUtf8,
+            "docu_stat":    docuStat.String,
+            "mcc_code_name": mccCodeNameUtf8,
+        }
+        cards = append(cards, card)
+    }
+
+    json.NewEncoder(w).Encode(cards)
+}
+
+// main 함수
 func main() {
     // .env 파일 읽기
     err := godotenv.Load(".env")
@@ -51,138 +174,10 @@ func main() {
 
     // API 엔드포인트 설정
     r.HandleFunc("/api/employees", GetEmployees).Methods("GET")
-    r.HandleFunc("/api/employee/{id}", GetEmployeeByID).Methods("GET")
-    r.HandleFunc("/api/employee", CreateEmployee).Methods("POST")
-    r.HandleFunc("/api/employee/{id}", UpdateEmployee).Methods("PUT")
-    r.HandleFunc("/api/employee/{id}", DeleteEmployee).Methods("DELETE")
+    r.HandleFunc("/api/cards", GetCards).Methods("GET")
 
     // 서버 시작
     log.Printf("Server running on port %s", serverPort)
     log.Fatal(http.ListenAndServe(":"+serverPort, r))
 }
 
-// GetEmployees: 모든 직원 목록 가져오기
-func GetEmployees(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    rows, err := db.Query("SELECT id, name, job_position, salary FROM employees")
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-        return
-    }
-    defer rows.Close()
-
-    employees := []map[string]interface{}{}
-    for rows.Next() {
-        var id int
-        var name, job_position string
-        var salary float64
-        err = rows.Scan(&id, &name, &job_position, &salary)
-        if err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-        employee := map[string]interface{}{
-            "id":           id,
-            "name":         name,
-            "job_position": job_position,
-            "salary":       salary,
-        }
-        employees = append(employees, employee)
-    }
-
-    json.NewEncoder(w).Encode(employees)
-}
-
-// GetEmployeeByID: ID로 직원 정보 가져오기
-func GetEmployeeByID(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    vars := mux.Vars(r)
-    id := vars["id"]
-
-    row := db.QueryRow("SELECT id, name, job_position, salary FROM employees WHERE id = @p1", id)
-    var employee struct {
-        ID           int     `json:"id"`
-        Name         string  `json:"name"`
-        JobPosition  string  `json:"job_position"`
-        Salary       float64 `json:"salary"`
-    }
-
-    err := row.Scan(&employee.ID, &employee.Name, &employee.JobPosition, &employee.Salary)
-    if err == sql.ErrNoRows {
-        http.Error(w, "Employee not found", http.StatusNotFound)
-        return
-    } else if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-        return
-    }
-
-    json.NewEncoder(w).Encode(employee)
-}
-
-// CreateEmployee: 직원 정보 생성
-func CreateEmployee(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-
-    var employee struct {
-        Name        string  `json:"name"`
-        JobPosition string  `json:"job_position"`
-        Salary      float64 `json:"salary"`
-    }
-
-    err := json.NewDecoder(r.Body).Decode(&employee)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    _, err = db.Exec("INSERT INTO employees (name, job_position, salary) VALUES (@p1, @p2, @p3)", employee.Name, employee.JobPosition, employee.Salary)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-        return
-    }
-
-    w.WriteHeader(http.StatusCreated)
-    json.NewEncoder(w).Encode(map[string]string{"message": "Employee created"})
-}
-
-// UpdateEmployee: 직원 정보 업데이트
-func UpdateEmployee(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    vars := mux.Vars(r)
-    id := vars["id"]
-
-    var employee struct {
-        Name        string  `json:"name"`
-        JobPosition string  `json:"job_position"`
-        Salary      float64 `json:"salary"`
-    }
-
-    err := json.NewDecoder(r.Body).Decode(&employee)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    _, err = db.Exec("UPDATE employees SET name = @p1, job_position = @p2, salary = @p3 WHERE id = @p4", employee.Name, employee.JobPosition, employee.Salary, id)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-        return
-    }
-
-    json.NewEncoder(w).Encode(map[string]string{"message": "Employee updated"})
-}
-
-// DeleteEmployee: 직원 정보 삭제
-func DeleteEmployee(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    vars := mux.Vars(r)
-    id := vars["id"]
-
-    _, err := db.Exec("DELETE FROM employees WHERE id = @p1", id)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-        return
-    }
-
-    json.NewEncoder(w).Encode(map[string]string{"message": "Employee deleted"})
-}
